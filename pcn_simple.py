@@ -21,6 +21,9 @@ class PredictiveCodingLayer(nn.Module):
 
     def forward(self, x):
         return torch.sigmoid(torch.matmul(x, self.W.t()) + self.b)
+    
+
+    
 
 # Simple predictive coding model with one hidden layer
 class PCNet(nn.Module):
