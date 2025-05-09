@@ -51,11 +51,6 @@ class PCNet(nn.Module):
 
     def stabilize(self, optimizer, steps):
         self.stabilize_until_convergence(optimizer)
-        # for _ in range(steps):
-        #     optimizer.zero_grad()
-        #     self.compute_errors_and_loss()
-        #     self.loss.backward(retain_graph=True)
-        #     optimizer.step()
 
     def stabilize_until_convergence(self, optimizer, max_steps=100, tol=1e-3, verbose=False):
         prev_loss = float('inf')
@@ -85,9 +80,6 @@ class PCNet(nn.Module):
                 self.activations[0].data.copy_(X)
                 self.randomize_activations(layers=[i for i in range(1, len(self.activations) - 1)])
                 self.activations[-1].data.copy_(Y)
-                
-            # self.activations[0].requires_grad_()
-            # self.activations[-1].requires_grad_()
 
             # Inference
             self.stabilize(self.clamped_both_optimizer, steps=30)
@@ -98,7 +90,34 @@ class PCNet(nn.Module):
             self.loss.backward()
             self.learning_optimizer.step()
 
-            if epoch % 100 == 0:
+
+    def train_with_loader(self, data_loader, epochs=3):
+        for epoch in range(epochs):
+            batch_num = 0
+            for X, Y in data_loader:
+                if (X.shape[0] != self.batch_size):
+                    continue
+            
+                Y = torch.nn.functional.one_hot(Y, num_classes=self.dims[-1]).float().to(self.device)
+
+                with torch.no_grad():
+                    self.activations[0].data.copy_(X)
+                    self.randomize_activations(layers=[i for i in range(1, len(self.activations) - 1)])
+                    self.activations[-1].data.copy_(Y)
+
+                # Inference
+                self.stabilize(self.clamped_both_optimizer, steps=30)
+
+                # Learning
+                self.compute_errors_and_loss()
+                self.learning_optimizer.zero_grad()
+                self.loss.backward()
+                self.learning_optimizer.step()
+
+                print(f"Batch {batch_num}, Cost: {self.loss.item():.4f}", end="\r")
+                batch_num += 1
+
+            if epoch % 1 == 0:
                 print(f"Epoch {epoch+1}, Loss: {self.loss.item():.4f}")
 
     def randomize_activations(self, layers):
@@ -110,13 +129,9 @@ class PCNet(nn.Module):
     def predict(self, X, steps=30):
         X = X.to(self.device)
 
-        # Clamp input without overwriting tensor
         with torch.no_grad():
             self.activations[0].data.copy_(X)
             self.randomize_activations(layers=[i for i in range(1, len(self.activations))])
-
-        # self.activations[0].requires_grad_()
-        # self.activations[-1].requires_grad_()
 
         # Stabilize output and hidden layers
         self.stabilize(self.clamped_in_optimizer, steps)
