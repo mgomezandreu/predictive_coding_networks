@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-# XOR dataset
+# XOR data
 X = torch.tensor([[0., 0.],
                   [0., 1.],
                   [1., 0.],
@@ -16,7 +16,7 @@ Y = torch.tensor([[0.],
 class PredictiveCodingLayer(nn.Module):
     def __init__(self, input_dim, output_dim):
         super().__init__()
-        self.W = nn.Parameter(torch.ones(output_dim, input_dim))
+        self.W = nn.Parameter(torch.randn(output_dim, input_dim) * 0.1)
         self.b = nn.Parameter(torch.zeros(output_dim))
 
     def forward(self, x):
@@ -24,113 +24,108 @@ class PredictiveCodingLayer(nn.Module):
 
 # Predictive coding network
 class PCNet(nn.Module):
-    def __init__(self, device):
+    def __init__(self, dims, device, batch_size=4):
         super().__init__()
         self.device = device
-        self.layer1 = PredictiveCodingLayer(2, 4)
-        self.layer2 = PredictiveCodingLayer(4, 1)
-        self.to(device)  # move model parameters to device
+        self.dims = dims
+        self.batch_size = batch_size
 
-    def inference(self, x, steps=30, lr=0.1):
-        x = x.to(self.device)
-        x1 = torch.randn(x.shape[0], 4, requires_grad=True, device=self.device)
-        x2 = torch.randn(x.shape[0], 1, requires_grad=True, device=self.device)
+        # Layers
+        self.layers = nn.ModuleList([
+            PredictiveCodingLayer(dims[i], dims[i + 1])
+            for i in range(len(dims) - 1)
+        ])
+        self.to(device)
 
-        for _ in range(steps):
-            mu1 = self.layer1(x)
-            mu2 = self.layer2(x1)
+        # Activations (created once, never overwritten)
+        self.activations = []
+        for dim in dims:
+            act = torch.zeros((batch_size, dim), device=device, requires_grad=True)
+            self.activations.append(act)
 
-            e1 = x1 - mu1
-            e2 = x2 - mu2
+        # Optimizers
+        self.internal_activations = self.activations[1:-1]
+        self.clamped_in_optimizer = optim.Adam(self.activations[1:], lr=0.1)
+        self.clamped_both_optimizer = optim.Adam(self.internal_activations, lr=0.1)
+        self.learning_optimizer = optim.Adam(self.parameters(), lr=0.01)
 
-            loss = ((e1**2).sum(dim=1) + (e2**2).sum(dim=1)).sum()
-            grads = torch.autograd.grad(loss, [x1, x2], retain_graph=True)
+    def compute_errors_and_loss(self):
+        self.errors = []
+        self.loss = 0.0
+        for i, layer in enumerate(self.layers):
+            pred = layer(self.activations[i])
+            err = self.activations[i + 1] - pred
+            self.errors.append(err)
+            self.loss += (err ** 2).sum()
 
-            x1 = (x1 - lr * grads[0]).detach().requires_grad_()
-            x2 = (x2 - lr * grads[1]).detach().requires_grad_()
-
-        return x1.detach(), x2.detach()
-
-    def inference_with_adam(self, x, steps=30, lr=0.05):
-        x = x.to(self.device)
-        x1 = torch.randn(x.size(0), 4, requires_grad=True, device=self.device)
-        x2 = torch.randn(x.size(0), 1, requires_grad=True, device=self.device)
-
-        optimizer = torch.optim.Adam([x1, x2], lr=lr)
-
-        for _ in range(steps):
-            optimizer.zero_grad()
-            mu1 = self.layer1(x)
-            mu2 = self.layer2(x1)
-
-            e1 = x1 - mu1
-            e2 = x2 - mu2
-
-            loss = ((e1**2).sum(dim=1) + (e2**2).sum(dim=1)).sum()
-            loss.backward()
-            optimizer.step()
-
-        return x1.detach(), x2.detach()
-
-    def inference_with_clamped_out(self, x, y, steps=80, lr=0.2):
-        x = x.to(self.device)
-        y = y.to(self.device)
-
-        x1 = torch.randn(x.size(0), 4, requires_grad=True, device=self.device)
-        x2 = y.detach()
-
-        optimizer = torch.optim.Adam([x1], lr=lr)
-
+    def stabilize(self, optimizer, steps):
         for _ in range(steps):
             optimizer.zero_grad()
-            mu1 = self.layer1(x)
-            mu2 = self.layer2(x1)
-
-            e1 = x1 - mu1
-            e2 = x2 - mu2
-
-            loss = ((e1**2).sum(dim=1) + (e2**2).sum(dim=1)).sum()
-            loss.backward()
+            self.compute_errors_and_loss()
+            self.loss.backward(retain_graph=True)
             optimizer.step()
 
-        # Final error after convergence
-        final_mu1 = self.layer1(x)
-        final_mu2 = self.layer2(x1.detach())
-        final_e1 = x1.detach() - final_mu1
-        final_e2 = x2 - final_mu2
-
-        total_loss = (final_e1**2).mean() + (final_e2**2).mean()
-        return total_loss
-
-    def train(self, X, Y):
+    def train(self, X, Y, epochs=3000):
         X, Y = X.to(self.device), Y.to(self.device)
-        optimizer = optim.Adam(self.parameters(), lr=0.01)
 
-        for epoch in range(3000):
-            optimizer.zero_grad()
-            loss = self.inference_with_clamped_out(X, Y)
-            loss.backward()
-            optimizer.step()
+        for epoch in range(epochs):
+            # Clamp input/output without overwriting
+            with torch.no_grad():
+                self.activations[0].data.copy_(X)
+                self.activations[-1].data.copy_(Y)
+                
+            self.activations[0].requires_grad_()
+            self.activations[-1].requires_grad_()
+
+            # Inference
+            self.stabilize(self.clamped_both_optimizer, steps=30)
+
+            # Learning
+            self.compute_errors_and_loss()
+            self.learning_optimizer.zero_grad()
+            self.loss.backward()
+            self.learning_optimizer.step()
 
             if epoch % 100 == 0:
-                print(f"Epoch {epoch+1}, Loss: {loss.item():.4f}")
+                print(f"Epoch {epoch+1}, Loss: {self.loss.item():.4f}")
+
+    def predict(self, X, steps=30):
+        X = X.to(self.device)
+
+        print("================")
+        for group in self.clamped_in_optimizer.param_groups:
+            for p in group['params']:
+                print(p.shape, p.requires_grad, torch.sum(p).item())
+        print("================")
+
+        # Clamp input without overwriting tensor
+        with torch.no_grad():
+            self.activations[0].data.copy_(X)
+            self.activations[-1].data.zero_()  # reset output
+
+        self.activations[0].requires_grad_()
+        self.activations[-1].requires_grad_()
+
+        # Stabilize output and hidden layers
+        self.stabilize(self.clamped_in_optimizer, steps)
+        return self.activations[-1].detach()
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
-    model = PCNet(device)
 
+    model = PCNet(dims=[2, 4, 1], device=device)
     model.train(X, Y)
 
-    print("\nFinal weights W1:", model.layer1.W)
-    print("Final biases b1:", model.layer1.b)
-    print("Final weights W2:", model.layer2.W)
-    print("Final biases b2:", model.layer2.b)
+    print("\nFinal Weights:")
+    for i, layer in enumerate(model.layers):
+        print(f"Layer {i} W:\n{layer.W}")
+        print(f"Layer {i} b:\n{layer.b}")
 
     X_test = X.to(device)
-    _, y_hat = model.inference(X_test)
-    print("\nInputs:\n", X_test)
-    print("y_hat:\n", y_hat.round())
+    y_hat = model.predict(X_test)
+    print("\nTest Inputs:\n", X_test)
+    print("Predicted Outputs:\n", y_hat)
 
 if __name__ == "__main__":
     main()
