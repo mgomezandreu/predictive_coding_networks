@@ -2,16 +2,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-# XOR data
-X = torch.tensor([[0., 0.],
-                  [0., 1.],
-                  [1., 0.],
-                  [1., 1.]])
-Y = torch.tensor([[0.],
-                  [1.],
-                  [1.],
-                  [0.]])
-
 # Predictive coding layer
 class PredictiveCodingLayer(nn.Module):
     def __init__(self, input_dim, output_dim):
@@ -45,9 +35,9 @@ class PCNet(nn.Module):
 
         # Optimizers
         self.internal_activations = self.activations[1:-1]
-        self.clamped_in_optimizer = optim.Adam(self.activations[1:], lr=0.5)
-        self.clamped_out_optimizer = optim.Adam(self.activations[:-1], lr =0.05)
-        self.clamped_both_optimizer = optim.Adam(self.internal_activations, lr=0.05)
+        self.clamped_in_optimizer = optim.Adam(self.activations[1:], lr=0.3)
+        self.clamped_out_optimizer = optim.Adam(self.activations[:-1], lr =0.3)
+        self.clamped_both_optimizer = optim.Adam(self.internal_activations, lr=0.3)
         self.learning_optimizer = optim.Adam(self.parameters(), lr=0.01)
 
     def compute_errors_and_loss(self):
@@ -67,7 +57,7 @@ class PCNet(nn.Module):
         #     self.loss.backward(retain_graph=True)
         #     optimizer.step()
 
-    def stabilize_until_convergence(self, optimizer, max_steps=100, tol=1e-4, verbose=False):
+    def stabilize_until_convergence(self, optimizer, max_steps=100, tol=1e-3, verbose=False):
         prev_loss = float('inf')
 
         for step in range(max_steps):
@@ -147,29 +137,3 @@ class PCNet(nn.Module):
 
 
 
-def main():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("Using device:", device)
-
-    model = PCNet(dims=[2, 4, 1], device=device)
-    model.train(X, Y)
-
-    print("\nFinal Weights:")
-    for i, layer in enumerate(model.layers):
-        print(f"Layer {i} W:\n{layer.W}")
-        print(f"Layer {i} b:\n{layer.b}")
-
-    print("==============================")
-    X_test = X.to(device)
-    y_hat = model.predict(X_test)
-    print("Test Inputs:\n", X_test)
-    print("Predicted Outputs:\n", y_hat)
-
-    print("==============================")
-    y_test = Y.to(device)
-    X_hat = model.reverse_predict(y_test)
-    print("Test Outputs", y_test)
-    print("Predicted Inputs: \n", X_hat)
-
-if __name__ == "__main__":
-    main()
