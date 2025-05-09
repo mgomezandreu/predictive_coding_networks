@@ -1,2 +1,6 @@
 .vscode
 data
+imgs
+*.pth
+*.pyc
+__pycache__

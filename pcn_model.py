@@ -49,6 +49,16 @@ class PCNet(nn.Module):
             self.errors.append(err)
             self.loss += (err ** 2).sum()
 
+        if getattr(self, "generating", False):
+            print("Generating mode")
+            # L1 sparsity penalty
+            # self.loss += 0.001 * self.activations[0].abs().sum()
+
+            # Optional: encourage values near 0 or 1 (low entropy)
+            input_sigmoid = torch.sigmoid(self.activations[0])
+            entropy = -(input_sigmoid * torch.log(input_sigmoid + 1e-6) + (1 - input_sigmoid) * torch.log(1 - input_sigmoid + 1e-6))
+            self.loss += 0.005 * entropy.sum()
+
     def stabilize(self, optimizer, steps):
         self.stabilize_until_convergence(optimizer)
 
